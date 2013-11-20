@@ -947,7 +947,7 @@ static uint32_t out_get_latency(const struct audio_stream_out *stream)
                     out->cfg.rate) * 1000;
 
 
-    return (latency_us / 1000) + 200;
+    return (latency_us / 1000);
 }
 
 static int out_set_volume(struct audio_stream_out *stream, float left,
