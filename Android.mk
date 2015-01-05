@@ -11,7 +11,7 @@ else
   bdroid_CFLAGS += -DHAS_NO_BDROID_BUILDCFG
 endif
 
-bdroid_CFLAGS += -Wall
+bdroid_CFLAGS += -Wall -Werror
 bdroid_CFLAGS += -DAVK_BACKPORT
 
 ifneq ($(BOARD_BLUETOOTH_BDROID_HCILP_INCLUDED),)
