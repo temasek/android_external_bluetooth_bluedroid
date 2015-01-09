@@ -2996,7 +2996,7 @@ BOOLEAN btif_media_aa_read_feeding(tUIPC_CH_ID channel_id)
             btif_media_cb.media_feeding_state.pcm.aa_feed_residue = 0;
             return TRUE;
         } else {
-            APPL_TRACE_WARNING("### UNDERFLOW :: ONLY READ %d BYTES OUT OF %d ###",
+            APPL_TRACE_DEBUG("### UNDERFLOW :: ONLY READ %d BYTES OUT OF %d ###",
                 nb_byte_read, read_size);
             btif_media_cb.media_feeding_state.pcm.aa_feed_residue += nb_byte_read;
             return FALSE;
@@ -3184,7 +3184,7 @@ static void btif_media_aa_prep_sbc_2_send(UINT8 nb_frame)
             }
             else
             {
-                APPL_TRACE_WARNING("btif_media_aa_prep_sbc_2_send underflow %d, %d",
+                APPL_TRACE_DEBUG("btif_media_aa_prep_sbc_2_send underflow %d, %d",
                     nb_frame, btif_media_cb.media_feeding_state.pcm.aa_feed_residue);
                 btif_media_cb.media_feeding_state.pcm.counter += nb_frame *
                      btif_media_cb.encoder.s16NumOfSubBands *
