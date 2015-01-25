@@ -190,10 +190,17 @@ enum {
 #define A2DP_MEDIA_TASK_STACK_SIZE       0x2000         /* In bytes */
 #endif
 
+#if (BTA_AV_CO_CP_SCMS_T == TRUE)
+/* A2DP header will contain a CP header of size 1 */
+#define A2DP_HDR_SIZE               2
+#else
 #define A2DP_HDR_SIZE               1
+#endif
 #define MAX_SBC_HQ_FRAME_SIZE_44_1  119
 #define MAX_SBC_HQ_FRAME_SIZE_48    115
-#define MAX_2MBPS_AVDTP_MTU         675
+
+/* 2DH5 payload size (679 bytes) - (4 bytes L2CAP Header + 12 bytes AVDTP Header) */
+#define MAX_2MBPS_AVDTP_MTU         663
 
 #define A2DP_MEDIA_TASK_TASK_STR        ((INT8 *) "A2DP-MEDIA")
 static UINT32 a2dp_media_task_stack[(A2DP_MEDIA_TASK_STACK_SIZE + 3) / 4];
@@ -227,8 +234,9 @@ static UINT32 a2dp_media_task_stack[(A2DP_MEDIA_TASK_STACK_SIZE + 3) / 4];
 #define A2DP_PACKET_COUNT_LOW_WATERMARK 5
 #define MAX_PCM_FRAME_NUM_PER_TICK     10
 #define RESET_RATE_COUNTER_THRESHOLD_MS    2000
+#define MAX_PCM_ITER_NUM_PER_TICK     2
 
-//#define BTIF_MEDIA_VERBOSE_ENABLED
+#define BTIF_MEDIA_VERBOSE_ENABLED
 /* In case of A2DP SINK, we will delay start by 5 AVDTP Packets*/
 #define MAX_A2DP_DELAYED_START_FRAME_COUNT 1
 #define PACKET_PLAYED_PER_TICK_48 8
@@ -2664,14 +2672,15 @@ static UINT32 get_frame_length()
 {
     UINT32 frame_len = 0;
     APPL_TRACE_DEBUG("channel mode: %d, sub-band: %d, number of block: %d, \
-            bitpool: %d, sampling frequency: %d",
+            bitpool: %d, sampling frequency: %d, num channels: %d",
             btif_media_cb.encoder.s16ChannelMode,
             btif_media_cb.encoder.s16NumOfSubBands,
             btif_media_cb.encoder.s16NumOfBlocks,
             btif_media_cb.encoder.s16BitPool,
-            btif_media_cb.encoder.s16SamplingFreq);
+            btif_media_cb.encoder.s16SamplingFreq,
+            btif_media_cb.encoder.s16NumOfChannels);
 
-    switch(btif_media_cb.encoder.s16NumOfChannels)
+    switch(btif_media_cb.encoder.s16ChannelMode)
     {
         case SBC_MONO:
         case SBC_DUAL:
@@ -2697,6 +2706,7 @@ static UINT32 get_frame_length()
         default:
             APPL_TRACE_DEBUG("Invalid channel number");
     }
+    APPL_TRACE_DEBUG("calculated frame length: %d", frame_len);
     return frame_len;
 }
 
@@ -2837,6 +2847,14 @@ static void btif_get_num_aa_frame(UINT8 *num_of_iterations, UINT8 *num_of_frames
                         if (nof < result)
                         {
                             noi = result / nof; // number of iterations would vary
+                            if (noi > MAX_PCM_ITER_NUM_PER_TICK)
+                            {
+                                APPL_TRACE_ERROR("## Audio Congestion (iterations:%d > max (%d))",
+                                     noi, MAX_PCM_ITER_NUM_PER_TICK);
+                                noi = 1;
+                                btif_media_cb.media_feeding_state.pcm.counter
+                                    =noi * nof * pcm_bytes_per_frame;
+                            }
                             result = nof;
                         }
                         else
@@ -2851,6 +2869,14 @@ static void btif_get_num_aa_frame(UINT8 *num_of_iterations, UINT8 *num_of_frames
                 {
                     // For BR cases nof will be same as the value retrieved at result
                     APPL_TRACE_DEBUG("headset is of type BR %u", nof);
+                    if (result > MAX_PCM_FRAME_NUM_PER_TICK)
+                    {
+                        APPL_TRACE_ERROR("## Audio Congestion (frames: %d > max (%d))"
+                            ,result, MAX_PCM_FRAME_NUM_PER_TICK);
+                        result = MAX_PCM_FRAME_NUM_PER_TICK;
+                        btif_media_cb.media_feeding_state.pcm.counter
+                            = noi * result * pcm_bytes_per_frame;
+                    }
                     nof = result;
                 }
                 btif_media_cb.media_feeding_state.pcm.counter -= noi * nof * pcm_bytes_per_frame;
