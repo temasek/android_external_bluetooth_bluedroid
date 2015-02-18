@@ -29,6 +29,14 @@
 #include <errno.h>
 #include <sys/times.h>
 
+#ifdef HAVE_ANDROID_OS
+#include <linux/ioctl.h>
+#include <linux/rtc.h>
+#include <utils/Atomic.h>
+#include <linux/android_alarm.h>
+#include <fcntl.h>
+#endif
+
 #include "gki_int.h"
 #include "bt_utils.h"
 
@@ -114,7 +122,27 @@ extern bt_os_callouts_t *bt_os_callouts;
 static UINT64 now_us()
 {
     struct timespec ts_now;
+
+#ifdef HAVE_ANDROID_OS
+    static int s_fd = -1;
+    int result;
+
+    if (s_fd == -1) {
+        int fd = open("/dev/alarm", O_RDONLY);
+        if (android_atomic_cmpxchg(-1, fd, &s_fd)) {
+            close(fd);
+        }
+    }
+
+    result = ioctl(s_fd,
+            ANDROID_ALARM_GET_TIME(ANDROID_ALARM_ELAPSED_REALTIME), &ts_now);
+    if (result != 0) {
+#endif
     clock_gettime(CLOCK_BOOTTIME, &ts_now);
+#ifdef HAVE_ANDROID_OS
+    }
+#endif
+
     return ((UINT64)ts_now.tv_sec * USEC_PER_SEC) + ((UINT64)ts_now.tv_nsec / NSEC_PER_USEC);
 }
 
@@ -154,12 +182,17 @@ static bool set_nonwake_alarm(UINT64 delay_millis)
 /** Callback from Java thread after alarm from AlarmService fires. */
 static void bt_alarm_cb(void *data)
 {
+    GKI_disable();
+
     alarm_service.timer_last_expired_us = now_us();
     UINT32 ticks_taken = GKI_MS_TO_TICKS((alarm_service.timer_last_expired_us
                                         - alarm_service.timer_started_us) / 1000);
+    UINT32 ticks_scheduled = alarm_service.ticks_scheduled;
 
-    GKI_timer_update(ticks_taken > alarm_service.ticks_scheduled
-                   ? ticks_taken : alarm_service.ticks_scheduled);
+    GKI_enable();
+
+    GKI_timer_update(ticks_taken > ticks_scheduled
+                   ? ticks_taken : ticks_scheduled);
 }
 
 /** NOTE: This is only called on init and may be called without the GKI_disable()

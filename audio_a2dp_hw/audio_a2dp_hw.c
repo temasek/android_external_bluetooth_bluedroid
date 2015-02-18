@@ -121,7 +121,6 @@ struct a2dp_stream_common {
 struct a2dp_stream_out {
     struct audio_stream_out stream;
     struct a2dp_stream_common common;
-    struct a2dp_config cfg;
 };
 
 struct a2dp_stream_in {
@@ -480,9 +479,9 @@ static int a2dp_read_audio_config(struct a2dp_stream_common *common)
 
 static int a2dp_set_audio_config(struct a2dp_stream_out *out)
 {
-    uint32_t sample_rate = out->cfg.rate;
-    uint8_t channel_count = audio_channel_count_from_out_mask(out->cfg.channel_flags);
-    uint8_t bit_per_sample = audio_bytes_per_sample(out->cfg.format) * 8;
+    uint32_t sample_rate = out->common.cfg.rate;
+    uint8_t channel_count = audio_channel_count_from_out_mask(out->common.cfg.channel_flags);
+    uint8_t bit_per_sample = audio_bytes_per_sample(out->common.cfg.format) * 8;
 
     char cmd = A2DP_CTRL_SET_AUDIO_CONFIG;
     uint8_t buf[6];
@@ -585,8 +584,9 @@ static int start_audio_datapath(struct a2dp_stream_common *common)
     }
     else if (a2dp_status == A2DP_CTRL_ACK_INCALL_FAILURE)
     {
-        ERROR("audiopath start failed- In call a2dp, move to suspended");
-        common->state = AUDIO_A2DP_STATE_SUSPENDED;
+        ERROR("audiopath start failed- In call a2dp, stay in state %s",
+            dump_a2dp_hal_state(oldstate));
+        common->state = oldstate;
         return -1;
     }
 
@@ -607,7 +607,7 @@ static int start_audio_datapath(struct a2dp_stream_common *common)
 }
 
 
-static int stop_audio_datapath(struct a2dp_stream_common *common)
+static int stop_audio_datapath(struct a2dp_stream_common *common, bool stay_suspended)
 {
     int oldstate = common->state;
 
@@ -627,7 +627,8 @@ static int stop_audio_datapath(struct a2dp_stream_common *common)
         return -1;
     }
 
-    common->state = AUDIO_A2DP_STATE_STOPPED;
+    if (!stay_suspended || common->state != AUDIO_A2DP_STATE_SUSPENDED)
+        common->state = AUDIO_A2DP_STATE_STOPPED;
 
     /* disconnect audio path */
     skt_disconnect(common->audio_fd);
@@ -712,7 +713,7 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
             /* emulate time this write represents to avoid very fast write
                failures during transition periods or remote suspend */
 
-            int us_delay = calc_audiotime(out->cfg, bytes);
+            int us_delay = calc_audiotime(out->common.cfg, bytes);
 
             ERROR("emulate a2dp write delay (%d us)", us_delay);
 
@@ -756,25 +757,25 @@ static ssize_t out_write(struct audio_stream_out *stream, const void* buffer,
 
     if (sent == -1)
     {
-        skt_disconnect(out->common.audio_fd);
-        out->common.audio_fd = AUDIO_SKT_DISCONNECTED;
-        if (out->common.state != AUDIO_A2DP_STATE_SUSPENDED)
-            out->common.state = AUDIO_A2DP_STATE_STOPPED;
-        else
-            ERROR("write failed : stream suspended, avoid resetting state");
+        pthread_mutex_lock(&out->common.lock);
+
+        stop_audio_datapath(&out->common, true);
+
+        pthread_mutex_unlock(&out->common.lock);
     }
 
     DEBUG("wrote %d bytes out of %zu bytes", sent, bytes);
     return sent;
 }
 
+
 static uint32_t out_get_sample_rate(const struct audio_stream *stream)
 {
     struct a2dp_stream_out *out = (struct a2dp_stream_out *)stream;
 
-    INFO("out_get_sample_rate %" PRIu32,out->cfg.rate);
+    INFO("rate %" PRIu32,out->common.cfg.rate);
 
-    return out->cfg.rate;
+    return out->common.cfg.rate;
 }
 
 static int out_set_sample_rate(struct audio_stream *stream, uint32_t rate)
@@ -789,7 +790,7 @@ static int out_set_sample_rate(struct audio_stream *stream, uint32_t rate)
         return -1;
     }
 
-    out->cfg.rate = rate;
+    out->common.cfg.rate = rate;
 
     return 0;
 }
@@ -807,16 +808,16 @@ static uint32_t out_get_channels(const struct audio_stream *stream)
 {
     struct a2dp_stream_out *out = (struct a2dp_stream_out *)stream;
 
-    INFO("channels 0x%" PRIx32, out->cfg.channel_flags);
+    INFO("channels 0x%" PRIx32, out->common.cfg.channel_flags);
 
-    return out->cfg.channel_flags;
+    return out->common.cfg.channel_flags;
 }
 
 static audio_format_t out_get_format(const struct audio_stream *stream)
 {
     struct a2dp_stream_out *out = (struct a2dp_stream_out *)stream;
-    INFO("format 0x%x", out->cfg.format);
-    return out->cfg.format;
+    INFO("format 0x%x", out->common.cfg.format);
+    return out->common.cfg.format;
 }
 
 static int out_set_format(struct audio_stream *stream, audio_format_t format)
@@ -863,7 +864,7 @@ static int out_set_parameters(struct audio_stream *stream, const char *kvpairs)
     char keyval[16];
     int retval = 0;
 
-    INFO("a2dp_out_set_parameters state %d", out->common.state);
+    INFO("state %d", out->common.state);
 
     parms = str_parms_create_str(kvpairs);
 
@@ -944,7 +945,7 @@ static uint32_t out_get_latency(const struct audio_stream_out *stream)
 
     latency_us = ((out->common.buffer_sz * 1000 ) /
                     audio_stream_out_frame_size(&out->stream) /
-                    out->cfg.rate) * 1000;
+                    out->common.cfg.rate) * 1000;
 
 
     return (latency_us / 1000);
@@ -1248,15 +1249,15 @@ static int adev_open_output_stream(struct audio_hw_device *dev,
     out->common.cfg.format = AUDIO_STREAM_DEFAULT_FORMAT;
     out->common.cfg.rate = AUDIO_STREAM_DEFAULT_RATE;
 
-    /* set output config values */
-    if (config)
-    {
+   /* set output config values */
+   if (config)
+   {
         if (is_supported_sample_rate(config->sample_rate))
-            out->cfg.rate = config->sample_rate;
+            out->common.cfg.rate = config->sample_rate;
         if (is_supported_channel_count(audio_channel_count_from_out_mask(config->channel_mask)))
-            out->cfg.channel_flags = config->channel_mask;
+            out->common.cfg.channel_flags = config->channel_mask;
         if (is_supported_bit_depth(audio_bytes_per_sample(config->format) * 8))
-            out->cfg.format = config->format;
+            out->common.cfg.format = config->format;
 
       config->format = out_get_format((const struct audio_stream *)&out->stream);
       config->sample_rate = out_get_sample_rate((const struct audio_stream *)&out->stream);
@@ -1296,7 +1297,7 @@ static void adev_close_output_stream(struct audio_hw_device *dev,
     INFO("closing output (state %d)", out->common.state);
 
     if ((out->common.state == AUDIO_A2DP_STATE_STARTED) || (out->common.state == AUDIO_A2DP_STATE_STOPPING))
-        stop_audio_datapath(&out->common);
+        stop_audio_datapath(&out->common, false);
 
     if (audio_sample_log_enabled) {
         ALOGV("close file output");
@@ -1493,7 +1494,7 @@ static void adev_close_input_stream(struct audio_hw_device *dev,
     INFO("closing input (state %d)", state);
 
     if ((state == AUDIO_A2DP_STATE_STARTED) || (state == AUDIO_A2DP_STATE_STOPPING))
-        stop_audio_datapath(&in->common);
+        stop_audio_datapath(&in->common, false);
 
     skt_disconnect(in->common.ctrl_fd);
     free(stream);

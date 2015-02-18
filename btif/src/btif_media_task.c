@@ -179,20 +179,11 @@ enum {
 #define BTIF_MEDIA_BITRATE_STEP 5
 #endif
 
-#ifdef SAMPLE_RATE_48K
-/* Middle quality quality setting @ 48 khz */
-#define DEFAULT_SBC_BITRATE 345
-
-#ifndef BTIF_A2DP_NON_EDR_MAX_RATE
-#define BTIF_A2DP_NON_EDR_MAX_RATE 237
-#endif
-#else
 /* Middle quality quality setting @ 44.1 khz */
 #define DEFAULT_SBC_BITRATE 328
 
 #ifndef BTIF_A2DP_NON_EDR_MAX_RATE
 #define BTIF_A2DP_NON_EDR_MAX_RATE 229
-#endif
 #endif
 
 #ifndef A2DP_MEDIA_TASK_STACK_SIZE
@@ -2861,8 +2852,6 @@ static void btif_get_num_aa_frame(UINT8 *num_of_iterations, UINT8 *num_of_frames
                                 APPL_TRACE_ERROR("## Audio Congestion (iterations:%d > max (%d))",
                                      noi, MAX_PCM_ITER_NUM_PER_TICK);
                                 noi = MAX_PCM_ITER_NUM_PER_TICK;
-                                btif_media_cb.media_feeding_state.pcm.counter
-                                    =noi * nof * pcm_bytes_per_frame;
                             }
                             result = nof;
                         }
@@ -2883,8 +2872,6 @@ static void btif_get_num_aa_frame(UINT8 *num_of_iterations, UINT8 *num_of_frames
                         APPL_TRACE_ERROR("## Audio Congestion (frames: %d > max (%d))"
                             ,result, MAX_PCM_FRAME_NUM_PER_TICK);
                         result = MAX_PCM_FRAME_NUM_PER_TICK;
-                        btif_media_cb.media_feeding_state.pcm.counter
-                            = noi * result * pcm_bytes_per_frame;
                     }
                     nof = result;
                 }
